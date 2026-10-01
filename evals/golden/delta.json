@@ -1,0 +1,6 @@
+{
+  "query": "Delta",
+  "expected_entity": "",
+  "should_be_ambiguous": true,
+  "notes": "Adversarial: several issuers share the prefix (Delta Air Lines, Delta Apparel). Must refuse to guess and list candidates."
+}

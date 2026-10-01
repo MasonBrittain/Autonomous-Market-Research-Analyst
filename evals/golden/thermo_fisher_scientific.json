@@ -1,0 +1,7 @@
+{
+  "query": "Thermo Fisher Scientific",
+  "expected_entity": "Thermo Fisher Scientific Inc.",
+  "expected_ticker": "TMO",
+  "expected_points": [],
+  "notes": "Full legal name with noise words. Tests name normalisation."
+}

@@ -1,0 +1,125 @@
+# {{ entity_name }}{% if ticker %} ({{ ticker }}){% endif %} — Research Brief
+
+{% if headline %}**{{ headline }}**
+
+{% endif %}
+*Generated {{ generated_at }} · evidence window: last {{ window_days }} days{% if industry %} · {{ industry }}{% endif %}*
+{% if provenance.stub %}
+> **Stub run.** Generated offline without model access. Section text is placeholder; structure, citations and metrics are real.
+{% endif %}
+
+## Executive summary
+
+{{ summary or "_Not generated._" }}
+
+{% if snapshot_rows %}
+## Snapshot
+
+| Metric | Value |
+| --- | --- |
+{% for label, value in snapshot_rows %}
+| {{ label }} | {{ value }} |
+{% endfor %}
+{% endif %}
+
+## SWOT
+
+{% for title, claims in swot.items() %}
+### {{ title }}
+
+{% if claims %}
+{% for c in claims %}
+- {{ c.statement }}{{ c.citations | cites }} *({{ c.confidence_label }} confidence)*
+{% if c.rationale %}
+  {{ c.rationale }}
+{% endif %}
+{% for contradiction in c.contradictions %}
+  - ⚠ **Contradicting evidence:** {{ contradiction }}
+{% endfor %}
+{% endfor %}
+{% else %}
+_Insufficient evidence in the window to support a claim here._
+{% endif %}
+
+{% endfor %}
+{% if risks %}
+## Stated risks vs. observed reality
+
+The company's own disclosed risk factors (10-K Item 1A), scored against what the
+evidence actually shows. {{ risks_materializing }} of {{ risks|length }} assessed risks show signs of materializing.
+
+| Disclosed risk | Status | Evidence |
+| --- | --- | --- |
+{% for r in risks %}
+| {{ r.summary }} | **{{ r.status }}** | {% if r.citations %}{{ r.citations | cites }} {{ r.reasoning }}{% else %}No recent evidence either way{% endif %} |
+{% endfor %}
+{% endif %}
+
+{% if catalysts %}
+## Recent catalysts
+
+{% for c in catalysts %}
+- {{ c.statement }}{{ c.citations | cites }}
+{% endfor %}
+{% endif %}
+
+{% if competitive or peers %}
+## Competitive position
+
+{% for c in competitive %}
+- {{ c.statement }}{{ c.citations | cites }}
+{% endfor %}
+{% if peers %}
+
+| Peer | Market cap | Gross margin | Operating margin | P/E |
+| --- | --- | --- | --- | --- |
+{% for p in peers %}
+| {{ p.ticker }}{% if p.name %} — {{ p.name }}{% endif %} | {{ p.market_cap }} | {{ p.gross_margin }} | {{ p.operating_margin }} | {{ p.pe }} |
+{% endfor %}
+
+*Peer set derived from SEC industry classification (SIC), which is broad — treat as a starting point.*
+{% endif %}
+{% endif %}
+
+{% if open_questions %}
+## Open questions
+
+What this brief could not answer from the evidence gathered:
+
+{% for q in open_questions %}
+- {{ q }}
+{% endfor %}
+{% endif %}
+
+{% if citations %}
+## Sources
+
+{% for c in citations %}
+{{ c.number }}. [{{ c.title or c.url }}]({{ c.url }}) — {{ c.label }}
+{% for quote in c.quotes %}
+   > {{ quote }}
+{% endfor %}
+{% endfor %}
+{% endif %}
+
+---
+
+## Provenance
+
+| | |
+| --- | --- |
+| Run ID | `{{ provenance.run_id }}` |
+| Model | `{{ provenance.model }}` |
+| Prompts | `{{ provenance.prompt_version }}` (fingerprint `{{ provenance.prompt_fingerprint }}`) |
+| Documents gathered / used | {{ provenance.documents_gathered }} / {{ provenance.documents_used }} |
+| Facts extracted | {{ provenance.facts }} |
+| Claims published / rejected | {{ provenance.claims_published }} / {{ provenance.claims_rejected }} |
+| Adversary rejection rate | {{ "%.1f"|format(provenance.rejection_rate * 100) }}% |
+| Duplicate rate | {{ "%.1f"|format(provenance.dedup_rate * 100) }}% |
+| Coverage score | {{ "%.0f"|format(provenance.coverage_score * 100) }}% over {{ provenance.scout_rounds }} scout round(s) |
+| LLM calls | {{ provenance.llm_calls }} |
+| Cache reads | {{ "{:,}".format(provenance.cache_read_tokens) }} tokens |
+| Cost | ${{ "%.4f"|format(provenance.cost_usd) }} |
+
+*Not investment advice. This brief is generated from public sources and may be
+incomplete or wrong; every claim is footnoted so it can be checked.*
