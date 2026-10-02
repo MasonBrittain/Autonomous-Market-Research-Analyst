@@ -1,0 +1,6 @@
+{
+  "query": "Stripe",
+  "expected_entity": "",
+  "should_be_ambiguous": true,
+  "notes": "Adversarial: private company, not in the SEC ticker index. Must refuse rather than resolve to a lookalike."
+}

@@ -1,0 +1,6 @@
+{
+  "query": "semiconductor industry",
+  "expected_entity": "Semiconductor Industry",
+  "should_be_industry": true,
+  "notes": "Industry mode: resolve to a peer set rather than one issuer."
+}

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ entity_name }} — Research Brief</title>
+<style>
+  :root {
+    --bg: #fcfcfa; --panel: #ffffff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e3e3dd; --accent: #2f5f4f; --warn: #8a4b2a; --quiet: #8a8a84;
+    --mat: #a33a2a; --contra: #2f6b45;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1d1f23; --ink: #e8e8e4; --muted: #9a9a94;
+      --line: #2e3137; --accent: #7fc0a8; --warn: #d8a07a;
+      --mat: #e08878; --contra: #7fc0a8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 48px 20px 80px; }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 .3em; letter-spacing: -.02em; }
+  h2 { font-size: 1.25rem; margin: 2.2em 0 .6em; padding-bottom: .3em;
+    border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1rem; margin: 1.6em 0 .5em; color: var(--accent);
+    text-transform: uppercase; letter-spacing: .06em; }
+  .headline { font-size: 1.1rem; font-weight: 600; color: var(--accent); margin: 0 0 1em; }
+  .meta { color: var(--muted); font-size: .85rem; margin-bottom: 2em; }
+  .stub { background: var(--panel); border-left: 3px solid var(--warn);
+    padding: .8em 1em; margin: 1.5em 0; font-size: .9rem; }
+  .lede { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 1.2em 1.4em; }
+  ul.claims { list-style: none; padding: 0; margin: 0; }
+  ul.claims > li { padding: .7em 0; border-bottom: 1px solid var(--line); }
+  ul.claims > li:last-child { border-bottom: none; }
+  .rationale { color: var(--muted); font-size: .9rem; margin-top: .3em; }
+  .conf { color: var(--muted); font-size: .75rem; text-transform: uppercase;
+    letter-spacing: .05em; margin-left: .4em; }
+  .contra { color: var(--warn); font-size: .88rem; margin-top: .4em;
+    padding-left: .8em; border-left: 2px solid var(--warn); }
+  sup a { color: var(--accent); text-decoration: none; font-size: .7rem;
+    padding: 0 .1em; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; margin: 1em 0; }
+  th, td { text-align: left; padding: .55em .7em; border-bottom: 1px solid var(--line);
+    vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .78rem;
+    text-transform: uppercase; letter-spacing: .05em; }
+  .status-materializing { color: var(--mat); font-weight: 600; }
+  .status-contradicted { color: var(--contra); font-weight: 600; }
+  .status-quiet { color: var(--quiet); }
+  ol.sources { font-size: .9rem; padding-left: 1.4em; }
+  ol.sources li { margin-bottom: .7em; }
+  ol.sources a { color: var(--accent); }
+  blockquote { margin: .4em 0 0; padding-left: .8em; border-left: 2px solid var(--line);
+    color: var(--muted); font-size: .88rem; }
+  .empty { color: var(--muted); font-style: italic; }
+  footer { margin-top: 3em; padding-top: 1.2em; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: .82rem; }
+  footer table { font-size: .82rem; }
+  .disclaimer { margin-top: 1.5em; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>{{ entity_name }}{% if ticker %} <span style="color:var(--muted)">({{ ticker }})</span>{% endif %}</h1>
+{% if headline %}
+<p class="headline">{{ headline }}</p>
+{% endif %}
+<p class="meta">Generated {{ generated_at }} · evidence window: last {{ window_days }} days{% if industry %} · {{ industry }}{% endif %}</p>
+
+{% if provenance.stub %}
+<div class="stub"><strong>Stub run.</strong> Generated offline without model access. Section text is placeholder; structure, citations and metrics are real.</div>
+{% endif %}
+
+<h2>Executive summary</h2>
+<div class="lede">{% if summary %}{{ summary }}{% else %}<span class="empty">Not generated.</span>{% endif %}</div>
+
+{% if snapshot_rows %}
+<h2>Snapshot</h2>
+<div class="tablewrap"><table>
+<tbody>
+{% for label, value in snapshot_rows %}
+<tr><th scope="row">{{ label }}</th><td>{{ value }}</td></tr>
+{% endfor %}
+</tbody>
+</table></div>
+{% endif %}
+
+<h2>SWOT</h2>
+{% for title, claims in swot.items() %}
+<h3>{{ title }}</h3>
+{% if claims %}
+<ul class="claims">
+{% for c in claims %}
+  <li>
+    {{ c.statement }}{{ c.citations | cite_links }}
+    <span class="conf">{{ c.confidence_label }}</span>
+    {% if c.rationale %}<div class="rationale">{{ c.rationale }}</div>{% endif %}
+    {% for contradiction in c.contradictions %}
+    <div class="contra"><strong>Contradicting evidence:</strong> {{ contradiction }}</div>
+    {% endfor %}
+  </li>
+{% endfor %}
+</ul>
+{% else %}
+<p class="empty">Insufficient evidence in the window to support a claim here.</p>
+{% endif %}
+{% endfor %}
+
+{% if risks %}
+<h2>Stated risks vs. observed reality</h2>
+<p>The company's own disclosed risk factors (10-K Item 1A), scored against what the evidence actually shows. <strong>{{ risks_materializing }} of {{ risks|length }}</strong> assessed risks show signs of materializing.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Disclosed risk</th><th>Status</th><th>Evidence</th></tr></thead>
+<tbody>
+{% for r in risks %}
+<tr>
+  <td>{{ r.summary }}</td>
+  <td class="status-{{ r.status_key }}">{{ r.status }}</td>
+  <td>{% if r.citations %}{{ r.citations | cite_links }} {{ r.reasoning }}{% else %}<span class="empty">No recent evidence either way</span>{% endif %}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table></div>
+{% endif %}
+
+{% if catalysts %}
+<h2>Recent catalysts</h2>
+<ul class="claims">
+{% for c in catalysts %}
+  <li>{{ c.statement }}{{ c.citations | cite_links }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+
+{% if competitive or peers %}
+<h2>Competitive position</h2>
+{% if competitive %}
+<ul class="claims">
+{% for c in competitive %}
+  <li>{{ c.statement }}{{ c.citations | cite_links }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if peers %}
+<div class="tablewrap"><table>
+<thead><tr><th>Peer</th><th>Market cap</th><th>Gross margin</th><th>Op. margin</th><th>P/E</th></tr></thead>
+<tbody>
+{% for p in peers %}
+<tr><td>{{ p.ticker }}{% if p.name %} — {{ p.name }}{% endif %}</td><td>{{ p.market_cap }}</td><td>{{ p.gross_margin }}</td><td>{{ p.operating_margin }}</td><td>{{ p.pe }}</td></tr>
+{% endfor %}
+</tbody>
+</table></div>
+<p class="meta">Peer set derived from SEC industry classification (SIC), which is broad — treat as a starting point.</p>
+{% endif %}
+{% endif %}
+
+{% if open_questions %}
+<h2>Open questions</h2>
+<p>What this brief could not answer from the evidence gathered:</p>
+<ul>
+{% for q in open_questions %}
+<li>{{ q }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+
+{% if citations %}
+<h2>Sources</h2>
+<ol class="sources">
+{% for c in citations %}
+<li id="src{{ c.number }}">
+  <a href="{{ c.url }}">{{ c.title or c.url }}</a> — {{ c.label }}
+  {% for quote in c.quotes %}<blockquote>{{ quote }}</blockquote>{% endfor %}
+</li>
+{% endfor %}
+</ol>
+{% endif %}
+
+<footer>
+<h2>Provenance</h2>
+<div class="tablewrap"><table><tbody>
+<tr><th scope="row">Run ID</th><td><code>{{ provenance.run_id }}</code></td></tr>
+<tr><th scope="row">Model</th><td><code>{{ provenance.model }}</code></td></tr>
+<tr><th scope="row">Prompts</th><td><code>{{ provenance.prompt_version }}</code> (fingerprint <code>{{ provenance.prompt_fingerprint }}</code>)</td></tr>
+<tr><th scope="row">Documents gathered / used</th><td>{{ provenance.documents_gathered }} / {{ provenance.documents_used }}</td></tr>
+<tr><th scope="row">Facts extracted</th><td>{{ provenance.facts }}</td></tr>
+<tr><th scope="row">Claims published / rejected</th><td>{{ provenance.claims_published }} / {{ provenance.claims_rejected }}</td></tr>
+<tr><th scope="row">Adversary rejection rate</th><td>{{ "%.1f"|format(provenance.rejection_rate * 100) }}%</td></tr>
+<tr><th scope="row">Duplicate rate</th><td>{{ "%.1f"|format(provenance.dedup_rate * 100) }}%</td></tr>
+<tr><th scope="row">Coverage</th><td>{{ "%.0f"|format(provenance.coverage_score * 100) }}% over {{ provenance.scout_rounds }} scout round(s)</td></tr>
+<tr><th scope="row">LLM calls</th><td>{{ provenance.llm_calls }}</td></tr>
+<tr><th scope="row">Cache reads</th><td>{{ "{:,}".format(provenance.cache_read_tokens) }} tokens</td></tr>
+<tr><th scope="row">Cost</th><td>${{ "%.4f"|format(provenance.cost_usd) }}</td></tr>
+</tbody></table></div>
+<p class="disclaimer">Not investment advice. This brief is generated from public sources and may be incomplete or wrong; every claim is footnoted so it can be checked.</p>
+</footer>
+
+</div>
+</body>
+</html>

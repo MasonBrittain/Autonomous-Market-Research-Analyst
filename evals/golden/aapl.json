@@ -1,0 +1,7 @@
+{
+  "query": "AAPL",
+  "expected_entity": "Apple Inc.",
+  "expected_ticker": "AAPL",
+  "expected_points": [],
+  "notes": "Mega-cap control case. Resolution must be exact from a bare ticker. Expected points still to be hand-written."
+}
