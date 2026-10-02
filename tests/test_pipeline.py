@@ -10,8 +10,16 @@ from __future__ import annotations
 
 import pytest
 
+from analyst.llm.client import LLMResult
 from analyst.llm.stub import StubLLM
-from analyst.models import NodeStatus, ResearchRun, RunConfig, RunStatus
+from analyst.models import (
+    NodeStatus,
+    ResearchRun,
+    RunConfig,
+    RunStatus,
+    UsageRecord,
+    Verdict,
+)
 from analyst.orchestrator.pipeline import NODES, AmbiguousTarget, Pipeline, PipelineDeps
 from analyst.orchestrator.store import RunStore
 
@@ -98,18 +106,69 @@ async def test_duplicate_syndicated_article_is_detected(fake_fetcher):
     assert all(e.cluster_id for e in duplicates)
 
 
-async def test_adversary_rejects_at_least_one_claim(fake_fetcher):
-    """A review pass that never rejects anything is not reviewing."""
+async def test_adversary_judges_every_claim(fake_fetcher):
+    """Every claim leaves the pass with a verdict, reasoning, and a consistent
+    `survived` flag.
+
+    Deliberately does not assert that some claim was rejected: which claims the
+    offline stand-in rejects depends on prompt hashing, which is not a contract.
+    `test_rejection_propagates_to_the_report` covers the rejection path by forcing
+    it instead of hoping for it.
+    """
     run = ResearchRun(query="Apple", config=RunConfig(stub=True))
     deps, _ = _deps(fake_fetcher)
     finished = await Pipeline(deps).run(run)
 
-    judged = [c for c in finished.claims if c.verdict is not None]
-    assert judged, "no claim was judged"
-    assert finished.rejection_rate > 0
-    rejected = [c for c in finished.claims if not c.survived]
-    assert rejected
-    assert all(c.verdict and c.verdict.reasoning for c in rejected)
+    assert finished.claims, "analyst produced no claims to judge"
+    assert all(c.verdict is not None for c in finished.claims), "a claim escaped review"
+    for claim in finished.claims:
+        assert claim.verdict is not None
+        assert claim.verdict.reasoning, "a verdict with no reasoning is not reviewable"
+        assert claim.survived == (claim.verdict.verdict is not Verdict.REJECT)
+
+
+async def test_rejection_propagates_to_the_report(fake_fetcher):
+    """Force every claim to be rejected, so the rejection path is exercised
+    deterministically rather than depending on the stand-in's hash buckets."""
+
+    class AlwaysRejects(StubLLM):
+        def structured(self, **kwargs):  # type: ignore[override]
+            model = kwargs["output_model"]
+            if model.__name__ == "ClaimJudgement":
+                parsed = model.model_validate(
+                    {
+                        "supported": False,
+                        "correct_section": True,
+                        "specific": False,
+                        "stale": False,
+                        "contradicting_fact_ids": [],
+                        "verdict": "reject",
+                        "reasoning": "forced rejection for test",
+                    }
+                )
+                return LLMResult(
+                    parsed=parsed,
+                    usage=UsageRecord(node="adversary.judge", model=self.model),
+                )
+            return super().structured(**kwargs)
+
+    run = ResearchRun(query="Apple", config=RunConfig(stub=True))
+    deps, _ = _deps(fake_fetcher)
+    deps.llm = AlwaysRejects()
+    finished = await Pipeline(deps).run(run)
+
+    assert finished.claims
+    assert finished.rejection_rate == 1.0
+    assert not any(c.survived for c in finished.claims)
+
+    # Nothing survived, so no claim may appear in the brief and the summary must
+    # say so rather than inventing analysis.
+    assert finished.report is not None
+    markdown = finished.report.markdown
+    for claim in finished.claims:
+        assert claim.statement not in markdown
+    assert "Insufficient evidence" in markdown
+    assert "insufficient" in finished.report.executive_summary.lower()
 
 
 async def test_cost_is_accounted_per_node(fake_fetcher):
