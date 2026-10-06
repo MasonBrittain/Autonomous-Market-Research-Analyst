@@ -102,9 +102,22 @@ Integrity metrics should be 1.00; a drop is a bug, not a quality dip.
 | `dedup_rate` | Share of gathered documents found to be duplicates |
 | `cost_usd` | Real spend, accumulated per node from `usage` on every call |
 
+Judged metrics sit alongside those, and are gated: until a run's claims have been
+hand-labelled, `citation_precision` and `specificity` report `trust: uncalibrated` and
+`quotable: false`, with the blocking reason printed next to the figure. Every judged
+proportion carries a Wilson interval rather than a bare percentage, and agreement with
+human labels is reported as Cohen's kappa — because a judge that rubber-stamps
+everything scores 0.90 raw agreement against a 90%-positive set while doing no work.
+
 ```bash
-python -m evals.harness report   # scoreboard; non-zero exit on an integrity failure
+python -m evals.harness report              # structural scoreboard; non-zero exit on an integrity failure
+python -m evals.harness judge <run_id>      # judged metrics (--live for the real model)
+python -m evals.harness label <run_id>      # export a human-labelling worksheet
+python -m evals.harness calibrate <run_id>  # judge vs. human labels: kappa, disagreements
 ```
+
+Full detail, including why citation precision measures *residual* error rather than
+error in the raw analysis, is in [`evals/README.md`](evals/README.md).
 
 ---
 
@@ -177,7 +190,13 @@ src/analyst/
   llm/               Claude client, strict schemas, offline stub
   orchestrator/      DAG runner + SQLite checkpoint store
 prompts/v1/          every prompt, versioned and fingerprinted into each report
-evals/               golden set + scoring harness
+evals/
+  harness.py         structural metrics + CLI
+  judge.py           LLM-as-judge for the semantic metrics
+  calibration.py     confusion matrix, Cohen's kappa, Wilson intervals, trust gate
+  specificity.py     mechanical filler detector, checked against the judge
+  labels/            hand labels (committed; the scarce artifact here)
+  golden/            research targets and their expected findings
 ```
 
 `simhash` deduplication is implemented directly rather than pulled from a dependency,
@@ -226,20 +245,27 @@ rather than swapping in cheaper models. Cost control comes from three places:
 Working and tested end to end:
 
 - All six pipeline stages, verified against live SEC and news data
-- 101 tests, `ruff` and `mypy --strict`-clean, no network or API key required
-- Crash resume, cost accounting, structural eval harness
+- Structural eval harness (quote integrity, citation validity, coverage, dedup,
+  rejection rate) running in CI on every commit
+- Judged eval layer: LLM-as-judge for citation precision, golden coverage and
+  specificity, with calibration against human labels — confusion matrix, Cohen's
+  kappa, Wilson intervals, and a gate that refuses to call a judged number a result
+  until the judge has been verified
+- Crash resume and per-node cost accounting
 - Entity resolution that refuses to guess: ambiguous names and private companies stop
   the run and list candidates rather than producing a confident brief about the wrong
   company
+- 155 tests, `ruff` and `mypy` clean, no network or API key required
 
 Not yet done, in priority order:
 
 1. **Hand-write `expected_points` for the golden set.** 15–20 targets × 5–8 findings.
-   The most tedious and highest-leverage work remaining — it is what turns "the output
-   looks good" into a number.
-2. **A calibrated judge** for citation precision and golden coverage. Deliberately
-   unimplemented rather than faked; before any of those numbers are worth quoting, the
-   judge's agreement rate with hand labels has to be published.
+   The harness that consumes them is built and gated; the labels themselves are human
+   work, and they are what turn "the output looks good" into a number.
+2. **Label ~50 claims and calibrate the judge.** The machinery is in place —
+   `evals.harness label` produces a worksheet carrying each claim with its quotes — but
+   until the labels exist, judged metrics correctly refuse to report themselves as
+   results.
 3. **Verify prompt caching against the live API.** The layout is implemented and its
    structure is unit-tested, but `cache_read_tokens > 0` can only be confirmed with a
    real key.
