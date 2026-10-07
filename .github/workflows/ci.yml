@@ -35,3 +35,89 @@ jobs:
       # and FakeFetcher serves canned SEC/RSS documents.
       - name: Test
         run: pytest -q
+
+  # The test suite runs from a source checkout, which hides packaging mistakes:
+  # prompts used to live outside the package and an installed copy could not find
+  # any of them. This job installs the built wheel somewhere the source tree is
+  # not, and loads every resource the app needs at runtime.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build the wheel
+        run: pip wheel --no-deps --wheel-dir dist .
+
+      - name: Install it into a clean environment
+        run: |
+          python -m venv /tmp/wheelenv
+          /tmp/wheelenv/bin/pip install dist/*.whl
+
+      - name: Every runtime resource loads from the installed wheel
+        working-directory: /tmp
+        run: |
+          /tmp/wheelenv/bin/python - <<'PY'
+          import analyst
+          from analyst.prompts import available_prompts, load_prompt
+          from analyst.scribe.render import TEMPLATE_DIR
+          from analyst.service.api import STATIC_DIR
+
+          assert "site-packages" in analyst.__file__, analyst.__file__
+          names = available_prompts()
+          assert len(names) >= 12, f"prompts missing from the wheel: {names}"
+          for name in names:
+              load_prompt(name)
+          for template in ("report.md.j2", "report.html.j2"):
+              assert (TEMPLATE_DIR / template).exists(), template
+          assert (STATIC_DIR / "index.html").exists()
+          print(f"ok: {len(names)} prompts, 2 templates and the demo page load from {analyst.__file__}")
+          PY
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build --tag analyst:ci .
+
+      - name: Start the API container
+        run: |
+          docker run --detach --name api --publish 8000:8000 \
+            --env SEC_USER_AGENT="autonomous-market-analyst-ci (ci@example.com)" analyst:ci
+          for attempt in $(seq 1 30); do
+            curl --silent --fail http://127.0.0.1:8000/healthz && exit 0
+            sleep 1
+          done
+          echo "API never became healthy" && exit 1
+
+      - name: Health, readiness and the demo page
+        run: |
+          curl --silent --fail http://127.0.0.1:8000/healthz
+          curl --silent --fail http://127.0.0.1:8000/readyz
+          curl --silent --fail http://127.0.0.1:8000/ | grep --quiet "Market Research Analyst"
+
+      - name: Runs as a non-root user
+        run: test "$(docker exec api id -u)" = "10001"
+
+      - name: Prompts load inside the image
+        run: >
+          docker exec api python -c
+          "from analyst.prompts import available_prompts, load_prompt;
+          names = available_prompts(); [load_prompt(n) for n in names];
+          print(f'{len(names)} prompts ok')"
+
+      - name: A worker starts against the same image and processes an empty queue
+        run: >
+          docker run --rm --volumes-from api
+          --env SEC_USER_AGENT="autonomous-market-analyst-ci (ci@example.com)"
+          analyst:ci analyst worker --once
+
+      - name: Container logs
+        if: failure()
+        run: docker logs api

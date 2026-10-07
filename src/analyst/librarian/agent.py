@@ -128,7 +128,6 @@ class Librarian:
 
         candidates = [e for e in evidence if e.is_usable and e.clean_text.strip()]
         facts = self._triage(entity, candidates)
-        self.stats.rejected_irrelevant = sum(1 for e in evidence if e.relevant is False)
         return evidence, facts
 
     # -- deterministic passes ---------------------------------------------- #
@@ -212,6 +211,10 @@ class Librarian:
             ev.relevance_reason = triage.reason
             ev.dimensions = _parse_dimensions(triage.dimensions)
             if not ev.relevant:
+                # Counted here, where the model rejects it -- not from `relevant is
+                # False` afterwards, which the stub filter also sets and which
+                # double-counted every paywalled page as off-topic.
+                self.stats.rejected_irrelevant += 1
                 continue
             for raw in triage.facts:
                 fact = self._accept_fact(ev, raw)

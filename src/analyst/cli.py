@@ -265,6 +265,139 @@ def cache_stats() -> None:
     console.print(f"location: {cache.root}")
 
 
+# --------------------------------------------------------------------------- #
+# Service
+# --------------------------------------------------------------------------- #
+
+
+def _require_sec_contact() -> None:
+    problem = settings().sec_user_agent_problem()
+    if problem:
+        console.print(f"[red]{problem}[/red]")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", help="Interface to bind")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port")] = 8000,
+    reload: Annotated[bool, typer.Option("--reload", help="Restart on code changes")] = False,
+) -> None:
+    """Run the HTTP API. Pair it with at least one `analyst worker`."""
+    import uvicorn
+
+    _require_sec_contact()
+    cfg = settings()
+    cfg.ensure_dirs()
+    if host not in ("127.0.0.1", "localhost") and not cfg.service_api_key:
+        console.print(
+            "[yellow]Listening beyond localhost with no ANALYST_SERVICE_API_KEY set: anyone "
+            "who can reach this port can start runs that spend model credits.[/yellow]"
+        )
+    console.print(
+        f"API on http://{host}:{port}  (mode={'live' if cfg.has_api_key else 'stub'}, "
+        f"data={cfg.runs_db.parent})"
+    )
+    uvicorn.run("analyst.service.api:create_app", factory=True, host=host, port=port, reload=reload)
+
+
+@app.command()
+def worker(
+    once: Annotated[bool, typer.Option("--once", help="Process one job (if any) and exit")] = False,
+    max_jobs: Annotated[
+        int, typer.Option("--max-jobs", help="Exit after this many jobs (0 = no limit)")
+    ] = 0,
+    poll: Annotated[float, typer.Option("--poll", help="Seconds between empty polls")] = 2.0,
+) -> None:
+    """Process queued research jobs until stopped.
+
+    `--once` suits event-driven hosting that starts a container per job; the
+    default loop suits an always-on replica. Ctrl+C finishes the current job
+    before exiting -- an interrupted job would be retried anyway, but finishing
+    it avoids paying for the takeover.
+    """
+    import signal
+    import threading
+
+    from .service.events import EventLog
+    from .service.jobs import JobQueue
+    from .service.worker import Worker
+
+    _require_sec_contact()
+    cfg = settings()
+    cfg.ensure_dirs()
+    store = RunStore()
+    queue = JobQueue(store, max_attempts=cfg.job_max_attempts)
+    runner = Worker(
+        queue,
+        EventLog(store.path),
+        lease_s=cfg.job_lease_s,
+        heartbeat_s=cfg.job_heartbeat_s,
+        poll_s=poll,
+    )
+    console.print(
+        f"worker {runner.worker_id}  (mode={'live' if cfg.has_api_key else 'stub'}, "
+        f"lease={cfg.job_lease_s:.0f}s, heartbeat={cfg.job_heartbeat_s:.0f}s)"
+    )
+
+    def report(outcome: object) -> None:
+        console.print(f"  {outcome}")
+
+    if once:
+        outcome = runner.run_once()
+        console.print(f"  {outcome}" if outcome else "  queue empty")
+        return
+
+    stop = threading.Event()
+
+    def request_stop(*_: object) -> None:
+        if stop.is_set():
+            raise KeyboardInterrupt
+        console.print("[yellow]stopping after the current job (Ctrl+C again to abort)[/yellow]")
+        stop.set()
+
+    signal.signal(signal.SIGINT, request_stop)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, request_stop)
+    processed = runner.run_forever(stop, max_jobs=max_jobs or None, on_outcome=report)
+    console.print(f"processed {processed} job(s)")
+
+
+@app.command()
+def jobs(
+    limit: Annotated[int, typer.Option("--limit")] = 20,
+    status: Annotated[str, typer.Option("--status", help="Filter by job status")] = "",
+) -> None:
+    """Show the job queue."""
+    import time
+
+    from .service.jobs import JobQueue, JobStatus
+
+    queue = JobQueue(RunStore())
+    depth = queue.depth()
+    console.print("  ".join(f"{name}={count}" for name, count in depth.items() if count) or "empty")
+    try:
+        wanted = JobStatus(status) if status else None
+    except ValueError as exc:
+        valid = ", ".join(s.value for s in JobStatus)
+        console.print(f"[red]unknown status {status!r}; one of: {valid}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    table = Table("job", "run", "query", "status", "attempts", "age", "last error", box=None)
+    now = time.time()
+    for job in queue.list(limit, status=wanted):
+        table.add_row(
+            job.id,
+            job.run_id,
+            job.query[:24],
+            job.status.value,
+            f"{job.attempts}/{job.max_attempts}",
+            f"{(now - job.created_at) / 60:.0f}m",
+            (job.last_error or "")[:48],
+        )
+    console.print(table)
+
+
 # `research` is the primary verb; keep it as the command name.
 app.command(name="research")(research_cmd)
 

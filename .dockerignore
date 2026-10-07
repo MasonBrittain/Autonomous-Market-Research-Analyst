@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+.env
+.cache
+runs
+out
+build
+dist
+*.whl
+evals
+tests
+docs
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache

@@ -4,10 +4,10 @@ The whole run is serialized after every node. That buys two things: a killed run
 resumes without re-fetching or re-paying for completed stages, and every finished
 run is a durable artifact an eval harness can re-score without re-running it.
 
-SQLite now, Azure SQL later -- the interface is deliberately narrow (save, load,
-list, delete) so swapping the backend touches only this file. The production
-queue will use `UPDATE ... WITH (UPDLOCK, READPAST) ... OUTPUT`, the T-SQL
-equivalent of SKIP LOCKED, against the same row shape.
+The interface is deliberately narrow (save, load, list, delete) so a different
+backend touches only this file. `save` accepts an open connection so a caller can
+make it part of a larger transaction -- the job queue creates a run and its job
+atomically that way.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import settings
+from ..db import connect
 from ..models import ResearchRun
 
 SCHEMA = """
@@ -36,6 +37,24 @@ CREATE INDEX IF NOT EXISTS idx_runs_ticker ON runs(ticker);
 CREATE INDEX IF NOT EXISTS idx_runs_updated ON runs(updated_at DESC);
 """
 
+UPSERT = """
+INSERT INTO runs (id, query, entity_name, ticker, status, created_at,
+                  updated_at, cost_usd, payload)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    entity_name = excluded.entity_name,
+    ticker      = excluded.ticker,
+    status      = excluded.status,
+    updated_at  = excluded.updated_at,
+    cost_usd    = excluded.cost_usd,
+    payload     = excluded.payload
+"""
+
+# The mutable columns, in the order `update_values` returns them.
+UPDATE_ASSIGNMENTS = (
+    "entity_name = ?, ticker = ?, status = ?, updated_at = ?, cost_usd = ?, payload = ?"
+)
+
 
 @dataclass
 class RunSummary:
@@ -48,48 +67,52 @@ class RunSummary:
     cost_usd: float
 
 
+def insert_values(run: ResearchRun) -> tuple[object, ...]:
+    return (
+        run.id,
+        run.query,
+        run.entity.name if run.entity else None,
+        run.entity.ticker if run.entity else None,
+        run.status.value,
+        run.created_at.isoformat(),
+        run.updated_at.isoformat(),
+        run.ledger.total_usd,
+        run.model_dump_json(),
+    )
+
+
+def update_values(run: ResearchRun) -> tuple[object, ...]:
+    return (
+        run.entity.name if run.entity else None,
+        run.entity.ticker if run.entity else None,
+        run.status.value,
+        run.updated_at.isoformat(),
+        run.ledger.total_usd,
+        run.model_dump_json(),
+    )
+
+
 class RunStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or settings().runs_db
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as conn:
             conn.executescript(SCHEMA)
-            conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect(self.path)
 
-    def save(self, run: ResearchRun) -> None:
+    def save(self, run: ResearchRun, *, conn: sqlite3.Connection | None = None) -> None:
+        """Insert or update a run.
+
+        With `conn`, the write joins that connection's open transaction and the
+        caller owns the commit. Without it, the write is its own transaction.
+        """
         run.touch()
-        with closing(self._connect()) as conn:
-            conn.execute(
-                """
-                INSERT INTO runs (id, query, entity_name, ticker, status, created_at,
-                                  updated_at, cost_usd, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    entity_name = excluded.entity_name,
-                    ticker      = excluded.ticker,
-                    status      = excluded.status,
-                    updated_at  = excluded.updated_at,
-                    cost_usd    = excluded.cost_usd,
-                    payload     = excluded.payload
-                """,
-                (
-                    run.id,
-                    run.query,
-                    run.entity.name if run.entity else None,
-                    run.entity.ticker if run.entity else None,
-                    run.status.value,
-                    run.created_at.isoformat(),
-                    run.updated_at.isoformat(),
-                    run.ledger.total_usd,
-                    run.model_dump_json(),
-                ),
-            )
-            conn.commit()
+        if conn is not None:
+            conn.execute(UPSERT, insert_values(run))
+            return
+        with closing(self._connect()) as own:
+            own.execute(UPSERT, insert_values(run))
 
     def load(self, run_id: str) -> ResearchRun | None:
         with closing(self._connect()) as conn:
@@ -106,13 +129,16 @@ class RunStore:
             ).fetchone()
         return ResearchRun.model_validate_json(row["payload"]) if row else None
 
-    def list_runs(self, limit: int = 20) -> list[RunSummary]:
+    def list_runs(self, limit: int = 20, *, ticker: str | None = None) -> list[RunSummary]:
+        sql = "SELECT id, query, entity_name, ticker, status, updated_at, cost_usd FROM runs"
+        params: list[object] = []
+        if ticker:
+            sql += " WHERE ticker = ?"
+            params.append(ticker.upper())
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
         with closing(self._connect()) as conn:
-            rows = conn.execute(
-                """SELECT id, query, entity_name, ticker, status, updated_at, cost_usd
-                   FROM runs ORDER BY updated_at DESC LIMIT ?""",
-                (limit,),
-            ).fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return [
             RunSummary(
                 id=r["id"],
@@ -129,5 +155,4 @@ class RunStore:
     def delete(self, run_id: str) -> bool:
         with closing(self._connect()) as conn:
             cursor = conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
-            conn.commit()
             return cursor.rowcount > 0

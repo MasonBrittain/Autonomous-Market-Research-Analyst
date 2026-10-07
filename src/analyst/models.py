@@ -116,6 +116,7 @@ class RunStatus(str, Enum):
     DONE = "done"
     FAILED = "failed"
     AMBIGUOUS = "ambiguous"
+    CANCELLED = "cancelled"
 
 
 class NodeStatus(str, Enum):
@@ -453,6 +454,7 @@ class Report(BaseModel):
     markdown: str = ""
     html: str = ""
     executive_summary: str = ""
+    headline: str = ""
     generated_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -477,6 +479,12 @@ class ResearchRun(BaseModel):
     peers: list[PeerMetric] = Field(default_factory=list)
     coverage: list[CoverageAssessment] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
+
+    # 10-K Item 1A, split into individual risks. Produced by Scout, consumed by the
+    # Analyst two nodes later -- so it has to live on the checkpointed run. Held on
+    # the Pipeline object instead, it vanished whenever a run resumed after Scout,
+    # and the stated-risks section silently disappeared from the report.
+    risk_factors: list[str] = Field(default_factory=list)
 
     nodes: dict[str, NodeState] = Field(default_factory=dict)
     ledger: CostLedger = Field(default_factory=CostLedger)

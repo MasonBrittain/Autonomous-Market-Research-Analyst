@@ -1,0 +1,43 @@
+# The API, one worker, and a shared volume holding the SQLite database and the
+# fetch cache. More workers: docker compose up --scale worker=3
+#
+# Sharing SQLite between containers through a local Docker volume is safe on one
+# host. It is NOT safe on a network filesystem such as Azure Files or NFS, because
+# SQLite's WAL locking needs local shared memory. Running across several hosts
+# needs a server database behind the same queue interface.
+
+x-analyst: &analyst
+  build: .
+  image: autonomous-market-analyst:local
+  environment:
+    ANALYST_DATA_DIR: /data
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    SEC_USER_AGENT: ${SEC_USER_AGENT:?set SEC_USER_AGENT in .env; SEC rejects requests without a contact email}
+    ANALYST_SERVICE_API_KEY: ${ANALYST_SERVICE_API_KEY:-}
+  volumes:
+    - analyst-data:/data
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *analyst
+    command: ["analyst", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      # Bound to localhost on the host. Expose it deliberately, and set
+      # ANALYST_SERVICE_API_KEY first: every accepted request spends model credits.
+      - "127.0.0.1:8000:8000"
+
+  worker:
+    <<: *analyst
+    command: ["analyst", "worker"]
+    healthcheck:
+      disable: true
+    depends_on:
+      api:
+        condition: service_healthy
+    # SIGTERM lets the worker finish its current job before exiting. A job cut
+    # off anyway is taken over after its lease lapses, from its last checkpoint.
+    stop_grace_period: 5m
+
+volumes:
+  analyst-data:

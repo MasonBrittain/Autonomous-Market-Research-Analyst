@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Research Analyst</title>
+<style>
+  :root {
+    --bg: #fcfcfa; --panel: #ffffff; --ink: #1a1a18; --muted: #6b6b66; --line: #e3e3dd;
+    --accent: #2f5f4f; --accent-ink: #ffffff; --warn: #8a4b2a; --bad: #a33a2a; --good: #2f6b45;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a; --panel: #1d1f23; --ink: #e8e8e4; --muted: #9a9a94; --line: #2e3137;
+      --accent: #7fc0a8; --accent-ink: #10221b; --warn: #d8a07a; --bad: #e08878; --good: #7fc0a8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+  h1 { font-size: 1.6rem; margin: 0 0 .2em; letter-spacing: -.02em; }
+  .sub { color: var(--muted); margin: 0 0 1.6em; }
+  .badge { display: inline-block; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+    padding: .15em .55em; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); margin-left: .4em; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  input[type=text], input[type=password], select { font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; padding: .55em .75em; }
+  input[type=text] { flex: 1 1 260px; min-width: 0; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: .55em 1.1em; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+  button:disabled { opacity: .5; cursor: default; }
+  details { margin-top: 10px; color: var(--muted); font-size: .88rem; }
+  details label { display: inline-flex; gap: 6px; align-items: center; margin: 6px 14px 0 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin-top: 18px; }
+  .message { color: var(--warn); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .chips button { background: transparent; color: var(--accent); border: 1px solid var(--accent); font-weight: 500; padding: .35em .8em; }
+  .agents { list-style: none; padding: 0; margin: 0; }
+  .agents li { display: grid; grid-template-columns: 18px 96px 1fr; gap: 10px; padding: 7px 0;
+    border-bottom: 1px solid var(--line); align-items: baseline; }
+  .agents li:last-child { border-bottom: 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: inline-block; }
+  .running .dot { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  .done .dot, .skipped .dot { background: var(--good); }
+  .failed .dot, .ambiguous .dot { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .agent { font-weight: 600; }
+  .detail { color: var(--muted); font-size: .9rem; overflow-wrap: anywhere; }
+  .log { font: .8rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--muted);
+    margin-top: 10px; max-height: 140px; overflow: auto; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 12px 0; }
+  .metric { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .metric b { display: block; font-size: 1.15rem; }
+  .metric span { color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+  .links a { color: var(--accent); margin-right: 14px; }
+  iframe { width: 100%; height: 640px; border: 1px solid var(--line); border-radius: 8px; margin-top: 12px; background: #fff; }
+  .recent { list-style: none; padding: 0; margin: 8px 0 0; }
+  .recent li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 10px; }
+  .recent a { color: var(--ink); }
+  .muted { color: var(--muted); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Market Research Analyst <span id="mode" class="badge">…</span></h1>
+  <p class="sub">Gathers evidence on a company, builds a cited brief, then red-teams its own claims.</p>
+
+  <form id="form">
+    <input id="query" type="text" placeholder="Company, ticker, or industry — e.g. AAPL" autocomplete="off" required maxlength="200">
+    <select id="lookback" aria-label="Evidence window">
+      <option value="30">30 days</option><option value="60">60 days</option>
+      <option value="120" selected>120 days</option><option value="365">1 year</option>
+    </select>
+    <button id="go" type="submit">Research</button>
+    <details>
+      <summary>Options</summary>
+      <label><input id="force" type="checkbox"> Ignore a recent identical brief</label>
+      <label>API key <input id="key" type="password" autocomplete="off" placeholder="only if the server requires one"></label>
+    </details>
+  </form>
+
+  <section id="notice" class="card" hidden></section>
+
+  <section id="progress" class="card" hidden>
+    <div class="row">
+      <strong id="target"></strong>
+      <button id="cancel" class="ghost" type="button">Cancel</button>
+    </div>
+    <ul id="agents" class="agents"></ul>
+    <div id="log" class="log"></div>
+  </section>
+
+  <section id="result" class="card" hidden>
+    <div class="row"><strong id="headline"></strong><span id="status" class="badge"></span></div>
+    <div id="metrics" class="metrics"></div>
+    <div id="links" class="links"></div>
+    <iframe id="brief" title="Research brief" sandbox></iframe>
+  </section>
+
+  <section class="card">
+    <strong>Recent briefs</strong>
+    <ul id="recent" class="recent"><li class="muted">Loading…</li></ul>
+  </section>
+</main>
+
+<script>
+"use strict";
+const AGENTS = [["resolve","Resolve"],["scout","Scout"],["curate","Librarian"],
+                ["analyze","Analyst"],["challenge","Adversary"],["compose","Scribe"]];
+const $ = (id) => document.getElementById(id);
+let source = null, currentRun = null;
+
+function el(tag, text, cls) {
+  const node = document.createElement(tag);
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  if (cls) node.className = cls;
+  return node;
+}
+function headers() {
+  const h = {"Content-Type": "application/json"};
+  const key = $("key").value.trim();
+  if (key) h["Authorization"] = "Bearer " + key;
+  return h;
+}
+function show(id, on) { $(id).hidden = !on; }
+function notice(text, chips) {
+  const box = $("notice");
+  box.replaceChildren(el("div", text, "message"));
+  if (chips && chips.length) {
+    const wrap = el("div", null, "chips");
+    for (const c of chips) {
+      const b = el("button", c.ticker ? `${c.name} (${c.ticker})` : c.name);
+      b.type = "button";
+      b.onclick = () => { $("query").value = c.ticker || c.name; submit(); };
+      wrap.append(b);
+    }
+    box.append(wrap);
+  }
+  show("notice", true);
+}
+
+function resetAgents() {
+  const list = $("agents");
+  list.replaceChildren();
+  for (const [node, label] of AGENTS) {
+    const li = el("li", null, "pending");
+    li.dataset.node = node;
+    li.append(el("span", null, "dot"), el("span", label, "agent"), el("span", "waiting", "detail"));
+    list.append(li);
+  }
+  $("log").replaceChildren();
+}
+function onProgress(ev) {
+  if (ev.node) {
+    const li = $("agents").querySelector(`[data-node="${ev.node}"]`);
+    if (!li) return;
+    const state = ev.status === "start" ? "running" : ev.status;
+    li.className = state;
+    li.querySelector(".detail").textContent =
+      ev.detail || ({running: "working…", skipped: "already complete (resumed)"}[state] || state);
+  } else {
+    const line = el("div", `${new Date(ev.ts * 1000).toLocaleTimeString()}  ${ev.status}${ev.detail ? " — " + ev.detail : ""}`);
+    $("log").append(line);
+    $("log").scrollTop = $("log").scrollHeight;
+  }
+}
+
+function follow(runId, label) {
+  currentRun = runId;
+  if (source) source.close();
+  show("result", false); show("progress", true);
+  $("target").textContent = label;
+  $("cancel").disabled = false;
+  resetAgents();
+  source = new EventSource(`/research/${encodeURIComponent(runId)}/events`);
+  source.addEventListener("progress", (e) => onProgress(JSON.parse(e.data)));
+  source.addEventListener("end", () => { source.close(); source = null; showResult(runId); });
+  source.addEventListener("timeout", () => { source.close(); source = null; showResult(runId); });
+}
+
+async function showResult(runId) {
+  $("cancel").disabled = true;
+  const res = await fetch(`/research/${encodeURIComponent(runId)}`);
+  if (!res.ok) return;
+  const run = await res.json();
+  $("headline").textContent = run.headline || (run.entity ? run.entity.name : run.query);
+  $("status").textContent = run.status + (run.mode === "stub" ? " · stub" : "");
+  const metrics = $("metrics");
+  metrics.replaceChildren();
+  if (run.metrics) {
+    const m = run.metrics;
+    for (const [value, name] of [
+      [m.claims_published, "claims published"], [m.claims_rejected, "rejected by adversary"],
+      [Math.round(m.coverage * 100) + "%", "coverage"], [m.stated_risks, "stated risks"],
+      [m.documents_used + " / " + m.documents, "documents used"], ["$" + m.cost_usd.toFixed(4), "cost"]]) {
+      const box = el("div", null, "metric");
+      box.append(el("b", value), el("span", name));
+      metrics.append(box);
+    }
+  } else if (run.error) {
+    metrics.append(el("div", run.error, "message"));
+  }
+  const links = $("links");
+  links.replaceChildren();
+  if (run.status === "done") {
+    for (const [fmt, name] of [["html","Open brief"],["md","Markdown"],["json","JSON"]]) {
+      const a = el("a", name);
+      a.href = run.links["report_" + fmt];
+      a.target = "_blank"; a.rel = "noopener";
+      links.append(a);
+    }
+    $("brief").src = run.links.report_html;
+    show("brief", true);
+  } else {
+    show("brief", false);
+  }
+  show("result", true);
+  loadRecent();
+}
+
+async function submit() {
+  const query = $("query").value.trim();
+  if (!query) return;
+  show("notice", false);
+  $("go").disabled = true;
+  try {
+    const res = await fetch("/research", {
+      method: "POST", headers: headers(),
+      body: JSON.stringify({query, lookback_days: Number($("lookback").value), force: $("force").checked}),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 422 && body.error === "ambiguous") {
+      notice(body.message, body.candidates || []);
+    } else if (res.status === 401) {
+      notice("This server requires an API key to start research. Add it under Options.");
+    } else if (!res.ok) {
+      notice(body.message || (body.detail && body.detail[0] && body.detail[0].msg) || `Request failed (${res.status})`);
+    } else if (body.cached) {
+      notice(`Reusing a brief finished ${Math.round(body.age_seconds / 60)} min ago. Tick "Ignore a recent identical brief" to start a new one.`);
+      show("progress", false);
+      showResult(body.run_id);
+    } else {
+      const name = body.entity ? (body.entity.ticker ? `${body.entity.name} (${body.entity.ticker})` : body.entity.name) : query;
+      follow(body.run_id, body.coalesced ? `${name} — joined a run already in progress` : name);
+    }
+  } catch (err) {
+    notice("Could not reach the server.");
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+async function loadRecent() {
+  const list = $("recent");
+  try {
+    const res = await fetch("/research?limit=10");
+    const {runs} = await res.json();
+    list.replaceChildren();
+    if (!runs.length) { list.append(el("li", "Nothing yet.", "muted")); return; }
+    for (const r of runs) {
+      const li = el("li");
+      const a = el("a", r.entity ? `${r.entity}${r.ticker ? " (" + r.ticker + ")" : ""}` : r.query);
+      a.href = "#";
+      a.onclick = (e) => {
+        e.preventDefault();
+        ["queued","running","retrying"].includes(r.status) ? follow(r.run_id, a.textContent) : showResult(r.run_id);
+      };
+      li.append(a, el("span", r.status, "muted"));
+      list.append(li);
+    }
+  } catch (err) { list.replaceChildren(el("li", "Could not load recent briefs.", "muted")); }
+}
+
+async function loadMode() {
+  try {
+    const res = await fetch("/readyz");
+    const info = await res.json();
+    $("mode").textContent = info.mode + (info.auth_required ? " · key required" : "");
+  } catch (err) { $("mode").textContent = "offline"; }
+}
+
+$("form").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
+$("cancel").addEventListener("click", async () => {
+  if (!currentRun) return;
+  $("cancel").disabled = true;
+  const res = await fetch(`/research/${encodeURIComponent(currentRun)}`, {method: "DELETE", headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) notice(body.message || "Could not cancel.");
+});
+loadMode();
+loadRecent();
+</script>
+</body>
+</html>

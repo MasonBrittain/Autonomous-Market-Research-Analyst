@@ -179,8 +179,9 @@ a single document.
 src/analyst/
   models.py          one state object; checkpointed after every node
   config.py          process settings
+  db.py              SQLite connections shared by runs, jobs and events
   cache.py           content-addressed fetch cache
-  prompts.py         versioned prompt loader
+  prompts/v1/        every prompt: versioned, fingerprinted into each report, shipped in the wheel
   tools/             fetch, entity resolution, EDGAR, news, financials, text
   scout/             the autonomous retrieval loop
   librarian/         triage, fact extraction, simhash deduplication
@@ -189,7 +190,12 @@ src/analyst/
   scribe/            rendering + templates
   llm/               Claude client, strict schemas, offline stub
   orchestrator/      DAG runner + SQLite checkpoint store
-prompts/v1/          every prompt, versioned and fingerprinted into each report
+  service/
+    api.py           HTTP API (FastAPI) and the demo page
+    jobs.py          durable job queue: leases, fencing, retries, coalescing
+    worker.py        claims jobs and runs the pipeline
+    events.py        persisted progress events behind the SSE stream
+    resolve.py       what counts as "the same research"
 evals/
   harness.py         structural metrics + CLI
   judge.py           LLM-as-judge for the semantic metrics
@@ -204,6 +210,74 @@ and the threshold is calibrated against measurement, not taste: identical copies
 measure 0, syndicated copies (different chrome, trimmed tail) measure 1–4,
 independently rewritten coverage of the same event measures ~33. The default of 8
 catches syndication while correctly treating a rewrite as separate corroboration.
+
+---
+
+## Running it as a service
+
+The CLI runs one brief in the foreground. The service splits that into an HTTP API
+that answers in milliseconds and workers that do the minutes-long research.
+
+```bash
+analyst serve          # http://127.0.0.1:8000: the demo page, plus /docs for the API
+analyst worker         # in another terminal; run several to work in parallel
+```
+
+Or the whole stack in containers:
+
+```bash
+docker compose up --build              # API on 127.0.0.1:8000 plus one worker
+docker compose up --scale worker=3     # more workers, same queue
+```
+
+| Endpoint | |
+| --- | --- |
+| `POST /research` | Start a brief, or reuse one. Body: `{"query": "AAPL", "lookback_days": 120, "force": false}` |
+| `GET /research/{id}` | Status, per-agent progress, metrics |
+| `GET /research/{id}/events` | Live progress as Server-Sent Events; resumes with `Last-Event-ID` |
+| `GET /research/{id}/report?format=html` | The brief. `md` and `json` too; JSON is the structured form a frontend renders from |
+| `DELETE /research/{id}` | Cancel: immediately if queued, at the next agent boundary if running |
+| `GET /research` | Recent runs, filterable by `ticker` |
+
+`POST /research` resolves the company *before* queueing anything, and answers in one
+of four ways:
+
+- **422** when the query is ambiguous, with the candidates attached. Nothing is spent.
+- **200** when an identical brief finished recently. "AAPL" and "Apple Inc." are the
+  same company, so either returns it.
+- **202, coalesced** when the same brief is already in progress. The caller joins it.
+- **202, created** when new work was queued.
+
+"Identical" means same company, same configuration, and same prompt text. A brief made
+before a prompt edit is never served as if it came from the new prompts, and an offline
+stub brief never answers a request for a real one.
+
+### What the queue guarantees
+
+Research costs money and takes minutes, so the queue is built for the cases where a
+naive status-column design loses either:
+
+- **Exactly one worker owns a job.** Tested with eight threads racing over forty jobs.
+- **A crashed worker's job is taken over, and the takeover resumes.** A claim is a
+  lease renewed by heartbeats. If a worker dies, the lease lapses and another worker
+  picks the job up from its last checkpoint. It does not repeat a fetch or a model call.
+- **A worker that lost its lease cannot overwrite its replacement.** Every claim
+  issues a fencing token, and checkpoint writes are refused once the token is stale.
+  The check and the write are one SQL statement, so there is no gap between them.
+- **Duplicate requests make one paid run.** A partial unique index enforces this, so
+  it does not depend on check-then-insert.
+- **Failures retry with jittered backoff, then dead-letter.** A model refusal does not
+  retry, because it would refuse again.
+
+The heartbeat runs on its own thread, deliberately. The pipeline's model calls block
+the event loop for seconds at a time. A heartbeat scheduled on that loop would starve,
+and a second worker would start a job that was still in progress. A real-time test
+blocks the main thread past the lease expiry and checks that no rival can claim it.
+A control test confirms the same lease does lapse without the heartbeat.
+
+Set `ANALYST_SERVICE_API_KEY` before exposing the API beyond localhost. Starting and
+cancelling work then need a bearer token. Reads stay open, since they cost nothing and
+a brief is meant to be shared.
 
 ---
 
@@ -252,10 +326,12 @@ Working and tested end to end:
   kappa, Wilson intervals, and a gate that refuses to call a judged number a result
   until the judge has been verified
 - Crash resume and per-node cost accounting
+- HTTP service: API, background workers, live progress over Server-Sent Events,
+  cancellation, a demo page, and a container image built and smoke-tested in CI
 - Entity resolution that refuses to guess: ambiguous names and private companies stop
   the run and list candidates rather than producing a confident brief about the wrong
   company
-- 155 tests, `ruff` and `mypy` clean, no network or API key required
+- 235 tests, `ruff` and `mypy` clean, no network or API key required
 
 Not yet done, in priority order:
 
@@ -269,7 +345,9 @@ Not yet done, in priority order:
 3. **Verify prompt caching against the live API.** The layout is implemented and its
    structure is unit-tested, but `cache_read_tokens > 0` can only be confirmed with a
    real key.
-4. FastAPI service, worker queue, and Azure deployment.
+4. Azure deployment. The service runs on one host today: SQLite on a local volume.
+   Going multi-host means Azure SQL behind the same queue interface. The claim and
+   fencing statements have direct T-SQL equivalents.
 
 ---
 

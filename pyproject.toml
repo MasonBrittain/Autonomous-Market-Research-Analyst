@@ -18,6 +18,8 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "python-dotenv>=1.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +38,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "analyst.scribe" = ["templates/*.j2"]
+"analyst.prompts" = ["v1/*.md"]
+"analyst.service" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
