@@ -298,3 +298,32 @@ def test_company_index_handles_both_payload_shapes():
     as_list = CompanyIndex.from_payload(list(TICKER_INDEX.values()))
     assert len(as_dict) == len(as_list) == len(TICKER_INDEX)
     assert json.loads(json.dumps(as_dict.rows))[0]["ticker"] == "AAPL"
+
+
+def test_extract_item_finds_a_heading_split_by_inline_markup():
+    """Regression: Microsoft's FY2026 10-K styles the heading letter by letter, so
+    flattened HTML reads "RIS K FACTORS". The strict pattern matched only the table
+    of contents and the whole stated-risks section silently disappeared."""
+    body = (
+        "Our operations and financial results are subject to various risks and "
+        "uncertainties that could adversely affect our business. "
+    ) * 20
+    html = (
+        "<p>Item 1A.</p><p>Risk Factors</p><p>14</p>"
+        "<p>Item 1B.</p><p>Unresolved Staff Comments</p><p>29</p>"
+        f"<p>ITEM 1A. RIS<span style='letter-spacing:1px'>K</span> FACTORS</p><p>{body}</p>"
+        "<p>ITEM 1B. UNRESOLVED STAFF COMMENTS</p><p>None.</p>"
+    )
+    text = html_to_text(html)
+    assert "RIS K FACTORS" in text, "fixture no longer reproduces the split heading"
+
+    item = edgar.extract_item(text, "1a", ("1b", "2"))
+    assert "subject to various risks" in item
+    assert "Unresolved" not in item
+    assert edgar.split_risk_factors(item)
+
+
+def test_loose_heading_patterns_stay_anchored_to_the_item_number():
+    """Tolerating split letters must not let one item's heading match another."""
+    text = "ITEM 7A. QUANTITATIVE AND QUALITATIVE DISCLOSURES\n" + ("Rates. " * 300)
+    assert edgar.extract_item(text, "7", ("8",)) == "", "Item 7A was mistaken for Item 7"

@@ -608,3 +608,27 @@ def test_unknown_model_falls_back_to_opus_rates():
     known = UsageRecord(node="n", model="claude-opus-5", output_tokens=1000)
     unknown = UsageRecord(node="n", model="some-future-model", output_tokens=1000)
     assert unknown.cost_usd == known.cost_usd
+
+
+def test_stubs_and_off_topic_documents_are_counted_separately():
+    """Regression: every paywalled page was also counted as off-topic, so a live run
+    reported "25 stub, 25 off-topic" out of 43 documents."""
+    from analyst.llm.schemas import DocumentTriage
+
+    class RejectsEverything(StubLLM):
+        def _make_document_triage(self, node, system, user):  # type: ignore[override]
+            return DocumentTriage(relevant=False, reason="about the fruit", dimensions=[], facts=[])
+
+    librarian = Librarian(RejectsEverything(), RunConfig(min_body_words=200))
+    entity = Entity(query="Apple", name="Apple Inc.", ticker="AAPL")
+    paywalled = [
+        _ev("Subscribe to continue reading. " * 3, url=f"https://x.com/p{i}") for i in range(3)
+    ]
+    off_topic = [
+        _ev(LONG_A.replace("Acme", f"Orchard{i}"), url=f"https://x.com/o{i}") for i in range(2)
+    ]
+
+    librarian.curate(entity, paywalled + off_topic)
+
+    assert librarian.stats.rejected_stub == 3
+    assert librarian.stats.rejected_irrelevant == 2, "stubs were counted as off-topic too"

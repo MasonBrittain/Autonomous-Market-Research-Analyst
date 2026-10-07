@@ -12,8 +12,31 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# src/analyst/config.py -> project root
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_DIR = Path(__file__).resolve().parent
+# src/analyst/config.py -> repository root. Only meaningful in a source checkout.
+PROJECT_ROOT = PACKAGE_DIR.parents[1]
+
+
+def _data_root() -> Path:
+    """Where caches, the run database and reports are written.
+
+    `ANALYST_DATA_DIR` wins when set -- that is how a container points everything
+    at one mounted volume. Otherwise a source checkout writes inside the repo (the
+    existing developer layout), and an installed package writes to the working
+    directory. Anchoring to `__file__` unconditionally, as this used to, would put
+    an installed package's data inside site-packages.
+    """
+    configured = os.getenv("ANALYST_DATA_DIR")
+    if configured:
+        return Path(configured)
+    if (PROJECT_ROOT / "pyproject.toml").exists():
+        return PROJECT_ROOT
+    return Path.cwd()
+
+
+def _under_data_root(env_var: str, default: str) -> Path:
+    # An absolute value in the env var wins, because `Path("/a") / "/b"` is "/b".
+    return _data_root() / os.getenv(env_var, default)
 
 
 @dataclass(frozen=True)
@@ -29,21 +52,54 @@ class Settings:
         )
     )
 
-    cache_dir: Path = field(
-        default_factory=lambda: PROJECT_ROOT / os.getenv("ANALYST_CACHE_DIR", ".cache")
-    )
+    cache_dir: Path = field(default_factory=lambda: _under_data_root("ANALYST_CACHE_DIR", ".cache"))
     runs_db: Path = field(
-        default_factory=lambda: PROJECT_ROOT / os.getenv("ANALYST_RUNS_DB", "runs/runs.sqlite3")
+        default_factory=lambda: _under_data_root("ANALYST_RUNS_DB", "runs/runs.sqlite3")
     )
-    out_dir: Path = field(
-        default_factory=lambda: PROJECT_ROOT / os.getenv("ANALYST_OUT_DIR", "out")
+    out_dir: Path = field(default_factory=lambda: _under_data_root("ANALYST_OUT_DIR", "out"))
+
+    # Prompts ship inside the package. They used to live at the repository root,
+    # which only resolved from a source checkout: an installed wheel -- and so any
+    # container image -- could not find a single prompt.
+    prompts_dir: Path = field(
+        default_factory=lambda: Path(os.getenv("ANALYST_PROMPTS_DIR") or PACKAGE_DIR / "prompts")
     )
-    prompts_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "prompts")
 
     # Politeness. SEC asks for <= 10 req/s; we are far more conservative.
     requests_per_second: float = 3.0
     request_timeout_s: float = 20.0
     max_fetch_concurrency: int = 6
+
+    # -- service ----------------------------------------------------------- #
+
+    # Bearer token required on endpoints that start paid work. Unset means open,
+    # which is right for local use and wrong for anything reachable from outside:
+    # every accepted request spends model credits.
+    service_api_key: str | None = field(
+        default_factory=lambda: os.getenv("ANALYST_SERVICE_API_KEY") or None
+    )
+    # Comma-separated origins allowed to call the API from a browser.
+    cors_origins: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            o.strip() for o in os.getenv("ANALYST_CORS_ORIGINS", "").split(",") if o.strip()
+        )
+    )
+    # A completed brief younger than this is served again instead of re-run.
+    report_ttl_s: float = field(
+        default_factory=lambda: float(os.getenv("ANALYST_REPORT_TTL_SECONDS", str(24 * 3600)))
+    )
+    # How long a worker owns a job before another may take it over, and how often
+    # it renews that claim. The ratio matters more than either number: the lease
+    # must survive several missed heartbeats.
+    job_lease_s: float = field(
+        default_factory=lambda: float(os.getenv("ANALYST_JOB_LEASE_SECONDS", "120"))
+    )
+    job_heartbeat_s: float = field(
+        default_factory=lambda: float(os.getenv("ANALYST_JOB_HEARTBEAT_SECONDS", "20"))
+    )
+    job_max_attempts: int = field(
+        default_factory=lambda: int(os.getenv("ANALYST_JOB_MAX_ATTEMPTS", "3"))
+    )
 
     @property
     def has_api_key(self) -> bool:

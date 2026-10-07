@@ -23,14 +23,26 @@ against the offline stand-in for tests and against the real client in anger.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 from analyst.llm.client import LLMClient, SystemBlock
 from analyst.models import Claim, ResearchRun, UsageRecord
-from analyst.prompts import load_prompt
 
 from . import specificity
+
+# Judge prompts are eval machinery, so they live beside the evals rather than in
+# the product package that ships in the wheel.
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+
+def load_prompt(name: str, version: str = "v1") -> str:
+    path = PROMPTS_DIR / version / f"{name}.md"
+    if not path.exists():
+        raise FileNotFoundError(f"no judge prompt {name!r} in {PROMPTS_DIR / version}")
+    return path.read_text(encoding="utf-8").strip()
+
 
 # --------------------------------------------------------------------------- #
 # Judge output schemas

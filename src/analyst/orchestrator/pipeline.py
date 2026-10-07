@@ -11,6 +11,14 @@ killed during analysis does not re-fetch a single document or re-pay for a singl
 extraction. The fact pack is rebuilt deterministically from stored facts -- pinned
 to `run.created_at` rather than wall-clock time, so recency ranking is identical
 on resume.
+
+The rule that makes this hold: **a node may not hand data to a later node through
+`self`.** A resumed run starts in a fresh Pipeline, possibly in a different
+process, so anything kept on the instance is gone. Derived state that is cheap to
+rebuild (the fact pack, the SEC index) is rebuilt on demand; everything else goes
+on the run. `tests/test_pipeline.py` resumes from each node boundary and asserts
+the report matches a clean run, which is what caught the two places this was
+broken.
 """
 
 from __future__ import annotations
@@ -46,10 +54,28 @@ from .store import RunStore
 NODES = ("resolve", "scout", "curate", "analyze", "challenge", "compose")
 
 ProgressFn = Callable[[str, str, str], None]
+StopFn = Callable[[], str | None]
 
 
 def _noop(node: str, status: str, detail: str) -> None:
     return None
+
+
+def _never() -> str | None:
+    return None
+
+
+class PipelineStopped(RuntimeError):
+    """Raised between nodes when the caller asks the run to stop.
+
+    Raised *before* a node starts, so nothing is half-written: the run on disk is
+    exactly the last checkpoint. What happens next -- marking it cancelled, or
+    walking away because another worker now owns it -- is the caller's decision.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class AmbiguousTarget(RuntimeError):
@@ -73,15 +99,19 @@ class PipelineDeps:
     fetcher: Fetcher
     store: RunStore | None = None
     progress: ProgressFn = _noop
+    # Polled before each node. Returning a reason stops the run cleanly; this is
+    # how the worker implements cancellation and backs off after losing a lease.
+    should_stop: StopFn = _never
     stats: dict[str, Any] = field(default_factory=dict)
 
 
 class Pipeline:
     def __init__(self, deps: PipelineDeps) -> None:
         self.deps = deps
+        # Caches only. Both are rebuilt on demand, so a resumed run in a fresh
+        # instance gets the same values -- see the module docstring.
         self._index: entity_tools.CompanyIndex | None = None
         self._pack: str = ""
-        self._risk_chunks: list[str] = []
 
     # -- public ------------------------------------------------------------ #
 
@@ -91,6 +121,10 @@ class Pipeline:
             if resume and state.status is NodeStatus.DONE:
                 self.deps.progress(node, "skipped", "already complete")
                 continue
+
+            reason = self.deps.should_stop()
+            if reason:
+                raise PipelineStopped(reason)
 
             state.status = NodeStatus.RUNNING
             state.attempts += 1
@@ -123,15 +157,29 @@ class Pipeline:
             self.deps.progress(node, "done", detail or "")
 
         run.status = RunStatus.DONE
+        # A run that succeeds on a retry should not keep reporting the error
+        # from the attempt that failed.
+        run.error = None
         self._checkpoint(run)
         return run
 
     # -- nodes ------------------------------------------------------------- #
 
+    async def _company_index(self) -> entity_tools.CompanyIndex:
+        """The SEC ticker index, loaded on first use.
+
+        Needed by resolve and again by scout for peer lookup. Loading it lazily
+        rather than only in resolve is what lets a run resumed after resolve still
+        map peer CIKs to tickers. The underlying fetch is disk-cached, so the
+        reload costs a file read, not a request.
+        """
+        if self._index is None:
+            self._index = await entity_tools.load_index(self.deps.fetcher)
+        return self._index
+
     async def _node_resolve(self, run: ResearchRun) -> str:
         run.status = RunStatus.RESOLVING
-        self._index = await entity_tools.load_index(self.deps.fetcher)
-        entity = entity_tools.resolve_from_index(run.query, self._index)
+        entity = entity_tools.resolve_from_index(run.query, await self._company_index())
         run.entity = entity
         if entity.needs_clarification:
             # Researching a guess produces a confident brief about the wrong
@@ -151,7 +199,7 @@ class Pipeline:
 
         run.evidence = result.evidence
         run.coverage = result.assessments
-        self._risk_chunks = result.risk_chunks
+        run.risk_factors = result.risk_chunks
         for usage in scout.usage_sink:
             run.ledger.add(usage)
 
@@ -172,7 +220,7 @@ class Pipeline:
             "tool_calls": result.tool_calls,
             "rounds": result.rounds,
             "evidence": len(result.evidence),
-            "risk_factors": len(self._risk_chunks),
+            "risk_factors": len(run.risk_factors),
             "coverage": run.latest_coverage.score if run.latest_coverage else 0.0,
         }
         coverage = run.latest_coverage
@@ -217,8 +265,8 @@ class Pipeline:
         claims += analyst.competitive(run.entity, run.snapshot, run.peers)
         run.claims = claims
 
-        if self._risk_chunks:
-            run.stated_risks = analyst.stated_risks(run.entity, self._risk_chunks)
+        if run.risk_factors:
+            run.stated_risks = analyst.stated_risks(run.entity, run.risk_factors)
 
         gaps = [d.value for d in (run.latest_coverage.gaps if run.latest_coverage else [])]
         run.open_questions = analyst.open_questions(run.entity, gaps, claims)
@@ -255,7 +303,9 @@ class Pipeline:
         for usage in scribe.usage_sink:
             run.ledger.add(usage)
         markdown, html = scribe.render(summary=summary, headline=headline)
-        run.report = Report(markdown=markdown, html=html, executive_summary=summary)
+        run.report = Report(
+            markdown=markdown, html=html, executive_summary=summary, headline=headline
+        )
         published = sum(1 for c in run.claims if c.survived)
         return f"{published} claims published, ${run.ledger.total_usd:.4f} total"
 
@@ -269,11 +319,10 @@ class Pipeline:
         _, self._pack = librarian.build_pack(run.facts, run.evidence, now=run.created_at)
 
     async def _resolve_peers(self, peer_ciks: list[str]) -> list:
-        if not peer_ciks or self._index is None:
+        if not peer_ciks:
             return []
-        tickers = [
-            t for t in (financials.ticker_for_cik(cik, self._index) for cik in peer_ciks) if t
-        ]
+        index = await self._company_index()
+        tickers = [t for t in (financials.ticker_for_cik(cik, index) for cik in peer_ciks) if t]
         if not tickers:
             return []
         return await financials.get_peer_metrics(tickers)

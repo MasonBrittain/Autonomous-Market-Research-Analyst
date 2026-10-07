@@ -75,13 +75,30 @@ def document_url(cik: str, accession: str, document: str) -> str:
 # Item extraction
 # --------------------------------------------------------------------------- #
 
+
+def _loose(phrase: str) -> str:
+    """A pattern for `phrase` that tolerates whitespace anywhere inside it.
+
+    Filings often style headings letter by letter -- `RIS<span>K</span> FACTORS`
+    -- and flattening HTML turns every tag boundary into a space, so the heading
+    reaches us as "RIS K FACTORS". A pattern requiring "risk" to be contiguous
+    misses the real heading entirely, matches only the table-of-contents entry,
+    and the stated-risks section silently disappears. This happened on Microsoft's
+    FY2026 10-K. Matching letter by letter stays anchored on the words while
+    ignoring where the markup happened to split them.
+    """
+    letters = [re.escape(ch) for ch in phrase if not ch.isspace()]
+    return r"\s*".join(letters)
+
+
+_SEPARATOR = r"[\.\:\s\-—]*"
 _ITEM_PATTERNS: dict[str, str] = {
-    "1a": r"item\s*1a[\.\:\s\-—]*\s*risk\s*factors",
-    "1b": r"item\s*1b[\.\:\s\-—]*\s*unresolved",
-    "2": r"item\s*2[\.\:\s\-—]*\s*propert",
-    "7": r"item\s*7[\.\:\s\-—]*\s*management",
-    "7a": r"item\s*7a[\.\:\s\-—]*\s*quantitative",
-    "8": r"item\s*8[\.\:\s\-—]*\s*financial\s*statements",
+    "1a": _loose("item 1a") + _SEPARATOR + _loose("risk factors"),
+    "1b": _loose("item 1b") + _SEPARATOR + _loose("unresolved"),
+    "2": _loose("item 2") + _SEPARATOR + _loose("propert"),
+    "7": _loose("item 7") + _SEPARATOR + _loose("management"),
+    "7a": _loose("item 7a") + _SEPARATOR + _loose("quantitative"),
+    "8": _loose("item 8") + _SEPARATOR + _loose("financial statements"),
 }
 
 

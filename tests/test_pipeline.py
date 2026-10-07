@@ -275,3 +275,59 @@ async def test_ambiguous_target_exception_lists_candidates(fake_fetcher):
     entity = entity_tools.resolve_from_index("Delta", index)
     exc = AmbiguousTarget(entity)
     assert "Delta" in str(exc)
+
+
+# --------------------------------------------------------------------------- #
+# Resume completeness
+#
+# A resumed run must produce the same report a clean run would. These pin two
+# bugs where node output lived on the Pipeline object instead of the checkpointed
+# run, so it vanished whenever a different process picked the run back up.
+# --------------------------------------------------------------------------- #
+
+
+async def _crash_then_resume(fake_fetcher, crash_node: str) -> tuple[ResearchRun, ResearchRun]:
+    """Run until `crash_node` raises, reload from the checkpoint, and finish in a
+    fresh Pipeline instance -- which is what a new worker process would do."""
+    store = RunStore()
+    run = ResearchRun(query="Apple", config=RunConfig(stub=True))
+    first = Pipeline(_deps(fake_fetcher, store=store)[0])
+
+    async def crash(_run):
+        raise RuntimeError(f"simulated crash in {crash_node}")
+
+    setattr(first, f"_node_{crash_node}", crash)
+    with pytest.raises(RuntimeError):
+        await first.run(run)
+
+    reloaded = store.load(run.id)
+    assert reloaded is not None
+    resumed = await Pipeline(_deps(fake_fetcher, store=store)[0]).run(reloaded)
+
+    clean = await Pipeline(_deps(fake_fetcher)[0]).run(
+        ResearchRun(query="Apple", config=RunConfig(stub=True))
+    )
+    return resumed, clean
+
+
+async def test_resume_after_scout_keeps_the_stated_risk_section(fake_fetcher):
+    """Regression: risk factors were held on the Pipeline, so a run resumed after
+    scout silently lost the whole stated-risks section."""
+    resumed, clean = await _crash_then_resume(fake_fetcher, "analyze")
+
+    assert clean.stated_risks, "fixture should produce stated risks on a clean run"
+    assert resumed.stated_risks, "resumed run dropped the stated-risks section"
+    assert len(resumed.stated_risks) == len(clean.stated_risks)
+    assert "Stated risks vs. observed reality" in (
+        resumed.report.markdown if resumed.report else ""
+    )
+
+
+async def test_resume_after_resolve_keeps_the_peer_set(fake_fetcher):
+    """Regression: the SEC index was held on the Pipeline, so a run resumed after
+    resolve could not map peer CIKs to tickers and silently had no peers."""
+    resumed, clean = await _crash_then_resume(fake_fetcher, "scout")
+
+    assert clean.peers, "fixture should produce peers on a clean run"
+    assert resumed.peers, "resumed run lost its peer set"
+    assert [p.ticker for p in resumed.peers] == [p.ticker for p in clean.peers]

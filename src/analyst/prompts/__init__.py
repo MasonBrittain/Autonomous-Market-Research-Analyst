@@ -1,9 +1,12 @@
 """Prompt loader.
 
-Prompts live in `prompts/<version>/*.md` rather than inline string literals so a
-run can record which prompt revision produced it. Without that, an eval score is
-unattributable -- you cannot tell whether a regression came from a prompt edit, a
-code change, or the model.
+Prompts live in `analyst/prompts/<version>/*.md` rather than inline string literals
+so a run can record which prompt revision produced it. Without that, an eval score
+is unattributable -- you cannot tell whether a regression came from a prompt edit,
+a code change, or the model.
+
+They are package data, shipped inside the wheel, because the pipeline cannot run
+without them. `ANALYST_PROMPTS_DIR` overrides the location for prompt experiments.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from .config import settings
+from ..config import settings
 
 
 class PromptNotFound(FileNotFoundError):
